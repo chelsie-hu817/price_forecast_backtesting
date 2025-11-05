@@ -15,13 +15,8 @@ from caiso_lmp_forecast import caiso_lmp_da_forecast
 import os
 from typing import Optional, Tuple
 
-def prepare_data(df, start, end, target, drop_cols):
-    y = df.loc[start:end][target]
-    X = df.loc[start:end].drop(columns=drop_cols)
-    return X, y
-
-
 def define_drop_cols(forecast_model, df):
+    # Drop targets from the features - usually
     return forecast_model.TARGETS
 
 def get_feature_data(forecast_model):
@@ -109,16 +104,13 @@ def rolling_backtesting(
         # Test mask = all rows on test day (HE 1..24)
         test_mask = (dates == test_d)
 
-        if not test_mask.any():
-            continue
-
-        print("train: ", df.loc[train_mask].index)
-        print("test: ", df.loc[test_mask].index)
+        # print("train: ", df.loc[train_mask].index)
+        # print("test: ", df.loc[test_mask].index)
 
         X_train = df.loc[train_mask].drop(columns=drop_cols)
         y_train = df.loc[train_mask, target_datatype]
-        print("X_train:", X_train.columns)
-        print("y_train:", y_train.name)
+        # print("X_train:", X_train.columns)
+        # print("y_train:", y_train.name)
 
         X_test  = df.loc[test_mask].drop(columns=drop_cols)
         y_test  = df.loc[test_mask, target_datatype]
