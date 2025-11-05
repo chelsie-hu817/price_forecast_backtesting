@@ -24,46 +24,13 @@ def prepare_data(df, start, end, target, drop_cols):
 def define_drop_cols(forecast_model, df):
     return forecast_model.TARGETS
 
-"""
-def get_feature_data(forecast_model):
-    # Load yes energy data - dict {yes_energy_item:data}
-    yes_energy_data_dict = {}
-
-    for item in forecast_model.YES_ENERGY_ITEMS:
-        datatype = forecast_model.YES_ENERGY_ITEMS[item][0]
-        object_id = forecast_model.YES_ENERGY_ITEMS[item][1]
-        url = f"{base_url}{datatype}/{object_id}"
-        response = requests.get(url, params=params, auth=HTTPBasicAuth(username, password))
-
-        if response.status_code == 200 and response.headers.get("Content-Type", ""):
-            tables = pd.read_html(StringIO(response.text))
-            tables[0]['DATETIME'] = pd.to_datetime(tables[0]['DATETIME'])
-            print(item, tables[0].head())
-            yes_energy_data_dict[item] = tables[0][['DATETIME', 'TIMEZONE' , 'AVGVALUE']]
-
-        time.sleep(10)
-
-    data = forecast_model.define_data(yes_energy_data_dict)
-    dfs = list(data.values())
-    df = reduce(lambda left, right: pd.merge(left, right, on=['DATETIME'], how='outer'), dfs)
-
-    return df"""
-
 def get_feature_data(forecast_model):
     """
     Pull Yes Energy series for every item in forecast_model.YES_ENERGY_ITEMS,
     then hand the raw tables to forecast_model.define_data(...) to engineer features.
-    Ensures each intermediate frame has a real 'DATETIME' column (not an index).
     """
-    from requests.auth import HTTPBasicAuth
-    import pandas as pd, time
-    from io import StringIO
-    import requests
-    from functools import reduce
-
     yes_energy_data_dict = {}
 
-    # 1) Download raw series
     for item, (datatype, object_id) in forecast_model.YES_ENERGY_ITEMS.items():
         url = f"{base_url}{datatype}/{object_id}"
         response = requests.get(url, params=params, auth=HTTPBasicAuth(username, password))
@@ -75,27 +42,18 @@ def get_feature_data(forecast_model):
             print(item, t.head())
         time.sleep(5)
 
-    # 2) Engineer features via model (calendar, DART, lags, etc.)
-    data_dict = forecast_model.define_data(yes_energy_data_dict)  # uses model’s pipeline
-    # (Your pipeline constructs features/targets here. :contentReference[oaicite:1]{index=1})
-
-    # 3) Normalize: guarantee DATETIME is a column for every frame
+    data_dict = forecast_model.define_data(yes_energy_data_dict) 
+ 
     for k, v in list(data_dict.items()):
         df = v
         if "DATETIME" not in df.columns:
             if df.index.name == "DATETIME":
                 df = df.reset_index()
             else:
-                # last resort: if index is datetime-like with no name
-                if pd.api.types.is_datetime64_any_dtype(df.index):
-                    df = df.reset_index().rename(columns={"index": "DATETIME"})
-                else:
-                    raise ValueError(f"{k} is missing a DATETIME column.")
-        # De-duplicate DATETIME just in case
-        df = df.sort_values("DATETIME").drop_duplicates(subset=["DATETIME"], keep="last")
+                raise ValueError(f"{k} is missing a DATETIME column.")
+        df = df.sort_values("DATETIME")
         data_dict[k] = df
 
-    # 4) Merge on DATETIME (outer)
     keys = list(data_dict.keys())
     base = data_dict[keys[0]].copy()
     for k in keys[1:]:
@@ -114,7 +72,7 @@ def rolling_backtesting(
     train_start,
     train_end,
     backtesting_window: int = 365,
-    cutoff_he: int = 10,     # include HE <= cutoff_he on day t; HE=0 means 24
+    cutoff_he: int = 10,     # include HE <= cutoff_he on day t
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
     For each step i:
@@ -145,10 +103,10 @@ def rolling_backtesting(
 
         # Training mask = full prior days + partial t_date up to cutoff HE
         prior_days_mask = (dates >= start_i) & (dates < t_date)
-        t_cut_mask      = (dates == t_date) & (he <= cutoff_he) & (he != 0)  # 0 (=24) is > any cutoff
+        t_cut_mask      = (dates == t_date) & (he <= cutoff_he) & (he != 0)  
         train_mask      = prior_days_mask | t_cut_mask
 
-        # Test mask = all rows on test day (HE 1..24; includes HE==0)
+        # Test mask = all rows on test day (HE 1..24)
         test_mask = (dates == test_d)
 
         if not test_mask.any():
@@ -245,7 +203,6 @@ def main(price, target_name, train_start, train_end, backtesting_window, dart_cl
     else:
         raise ValueError("price must be 'LMP' or 'ENERGY'.")
 
-    # Cache engineered frame per price
     if os.path.exists(data_path):
         data = pd.read_excel(data_path)
     else:
@@ -253,7 +210,6 @@ def main(price, target_name, train_start, train_end, backtesting_window, dart_cl
         data = get_feature_data(forecast_model)
         data.to_excel(data_path, index=False)
 
-    # Index & clean
     data["DATETIME"] = pd.to_datetime(data["DATETIME"])
     feature = data.copy()
     feature.index = feature["DATETIME"]
@@ -263,7 +219,7 @@ def main(price, target_name, train_start, train_end, backtesting_window, dart_cl
     if dart_clip != 270 and "DART_SOFT_CLIPPED_270" in feature.columns:
         feature = derive_dart_soft_clip(feature, new_clip= clip, source_col= "DART_SOFT_CLIPPED_270", base_clip=270)
 
-    # Map target_name to actual column & model key
+
     if price == "LMP":
         if tgt == "DA":
             target_col = "DALMP"
@@ -283,7 +239,6 @@ def main(price, target_name, train_start, train_end, backtesting_window, dart_cl
         else:
             raise ValueError("For ENERGY, target_name must be 'DA' or 'DART'.")
 
-    # Run rolling backtest
     result, importance = rolling_backtesting(
         forecast_model, model_key, target_col, feature,
         train_start, train_end, backtesting_window
